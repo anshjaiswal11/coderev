@@ -7,14 +7,26 @@ const { enqueueReview } = require('../services/queueService');
 
 const router = express.Router();
 
+/**
+ * Verify GitHub webhook HMAC-SHA256 signature.
+ * Uses req.rawBody (raw Buffer attached by server.js middleware) so the
+ * signature is computed over the exact bytes GitHub sent — not over
+ * JSON.stringify(req.body), which can differ in key ordering.
+ */
 function verifySignature(req) {
   const sig = req.headers['x-hub-signature-256'];
-  if (!sig || !process.env.GITHUB_WEBHOOK_SECRET) return true; // skip in dev
+  if (!sig || !process.env.GITHUB_WEBHOOK_SECRET) return true; // skip when secret not configured
+  const rawBody = req.rawBody;
+  if (!rawBody) return false; // if raw body is missing, fail safely
   const expected = 'sha256=' + crypto
     .createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET)
-    .update(JSON.stringify(req.body))
+    .update(rawBody)
     .digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch {
+    return false;
+  }
 }
 
 router.post('/github', async (req, res) => {

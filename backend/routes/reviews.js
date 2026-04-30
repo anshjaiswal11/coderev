@@ -80,7 +80,7 @@ router.post('/:id/create-pr', auth, async (req, res) => {
       await gh.createRef(owner, name, branchName, baseSha);
 
       // Create file on new branch
-      const created = await gh.createOrUpdateFile(owner, name, filePath, content, branchName, `Automated fix: ${filePath}`);
+      await gh.createOrUpdateFile(owner, name, filePath, content, branchName, `Automated fix: ${filePath}`);
 
       // Create PR
       const pr = await gh.createPullRequest(owner, name, prTitle, branchName, base, prBody || 'Automated changes suggested by CodeRev');
@@ -157,7 +157,7 @@ router.post('/repo-scan', auth, async (req, res) => {
           secretsDetected: result.secretsDetected || [],
           complianceFlags: result.complianceFlags || [],
           totalIssues: (result.issues || []).length,
-          rawAIResponse: result._rawAIResponse || result.rawAIResponse || result.rawAIResponse || undefined,
+          rawAIResponse: result._rawAIResponse || result.rawAIResponse || undefined,
           rawAIError: result._rawAIError || result.rawAIError || undefined,
           aiRating: result.aiRating,
           suggestedChanges: result.suggestedChanges || [],
@@ -189,6 +189,35 @@ router.post('/repo-scan', auth, async (req, res) => {
         }
       }
     })();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── IMPORTANT: /manual must be declared before /:id to avoid Express matching
+// "manual" as an ObjectId parameter and returning 404.
+
+// Manual review (paste diff)
+router.post('/manual', auth, async (req, res) => {
+  try {
+    const { repoId, diffContent, title } = req.body;
+    if (!diffContent) return res.status(400).json({ error: 'diffContent is required' });
+
+    const repo = repoId
+      ? await Repository.findOne({ _id: repoId, owner: req.user._id })
+      : null;
+
+    const review = await Review.create({
+      repository: repo?._id,
+      requestedBy: req.user._id,
+      prTitle: title || 'Manual Review',
+      diffContent,
+      filesChanged: [],
+      status: 'pending',
+    });
+
+    await enqueueReview(review._id.toString());
+    res.status(201).json({ review });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -340,32 +369,6 @@ router.post('/:id/issues/:issueId/autofix', auth, async (req, res) => {
     await review.save();
 
     res.json({ fix, issueId: req.params.issueId });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Manual review (paste diff)
-router.post('/manual', auth, async (req, res) => {
-  try {
-    const { repoId, diffContent, title } = req.body;
-    if (!diffContent) return res.status(400).json({ error: 'diffContent is required' });
-
-    const repo = repoId
-      ? await Repository.findOne({ _id: repoId, owner: req.user._id })
-      : null;
-
-    const review = await Review.create({
-      repository: repo?._id,
-      requestedBy: req.user._id,
-      prTitle: title || 'Manual Review',
-      diffContent,
-      filesChanged: [],
-      status: 'pending',
-    });
-
-    await enqueueReview(review._id.toString());
-    res.status(201).json({ review });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

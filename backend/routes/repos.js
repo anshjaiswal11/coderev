@@ -19,9 +19,8 @@ router.get('/github', auth, async (req, res) => {
       repos = await gh.listRepos();
     }
     
-    // The search endpoint might return { items: [] }, but listRepos returns []
-    // To match frontend, if search returns items, return it as such, or wrap it.
-    // Wait, the frontend expects ghRepos.items for search results.
+    // The search endpoint returns { total_count, items }, listRepos returns [].
+    // Normalize to consistent shape so the frontend always receives { items } for search.
     if (req.query.q) {
       if (!repos.items) repos = { items: repos };
       res.json(repos);

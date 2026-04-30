@@ -517,7 +517,6 @@ async function runRepoReview({ repoName, files = [], repoContext = '', styleGuid
   return aggregated;
 }
 
-module.exports = { runAIReview, generateAutoFix, analyzeCodebaseMemory, runRepoReview, generateSuggestedChange };
 // Helper to parse raw AI response text into the standard parsed object used by runAIReview
 async function parseRawAIResponse(text) {
   if (!text) return null;
@@ -544,4 +543,11 @@ async function parseRawAIResponse(text) {
   }
 }
 
-module.exports.parseRawAIResponse = parseRawAIResponse;
+module.exports = {
+  runAIReview,
+  generateAutoFix,
+  analyzeCodebaseMemory,
+  runRepoReview,
+  generateSuggestedChange,
+  parseRawAIResponse,
+};
