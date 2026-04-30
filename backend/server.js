@@ -26,7 +26,7 @@ const server = http.createServer(app);
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:5173',
   'http://localhost:5174',
-  'http://localhost:5175'
+  'http://localhost:5175',
 ];
 
 // Socket.IO setup
@@ -40,6 +40,20 @@ const io = new Server(server, {
 
 // Make io available to routes
 app.set('io', io);
+
+// ─── Raw body capture for GitHub webhook HMAC verification ───────────────────
+// Must be registered BEFORE express.json() for the webhook route.
+app.use('/api/webhooks/github', express.raw({ type: 'application/json' }), (req, _res, next) => {
+  // Attach raw buffer so webhooks.js can verify the HMAC signature correctly.
+  req.rawBody = req.body;
+  // Re-parse body as JSON for the rest of the handler
+  try {
+    req.body = JSON.parse(req.rawBody.toString('utf8'));
+  } catch {
+    req.body = {};
+  }
+  next();
+});
 
 // Middleware
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -89,8 +103,13 @@ io.on('connection', (socket) => {
   });
 });
 
+// 404 handler
+app.use((_req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
 // Error handler
-app.use((err, req, res, next) => {
+app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   console.error(err.stack);
   res.status(err.status || 500).json({
     error: err.message || 'Internal Server Error',

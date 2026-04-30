@@ -5,3 +5,9 @@ dist/
 *.log
 .cache/
 coverage/
+
+# AI service debug logs (created by backend/services/aiService.js)
+backend/logs/
+
+# Build artifacts
+frontend/dist/

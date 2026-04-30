@@ -3,6 +3,7 @@ import axios from 'axios';
 const api = axios.create({
   baseURL: '/api',
   withCredentials: true,
+  timeout: 120000, // 2-minute timeout to handle long-running AI requests
 });
 
 api.interceptors.request.use((config) => {

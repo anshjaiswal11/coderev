@@ -7,6 +7,27 @@ const User = require('../models/User');
 
 let reviewQueue = null;
 
+/**
+ * Parse a Redis URL into a host/port/password options object for Bull.
+ * Bull's `redis` option does not accept a URL string directly.
+ */
+function parseRedisUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const opts = {
+      host: parsed.hostname || '127.0.0.1',
+      port: Number(parsed.port) || 6379,
+    };
+    if (parsed.password) opts.password = decodeURIComponent(parsed.password);
+    if (parsed.username) opts.username = decodeURIComponent(parsed.username);
+    // Support TLS for Upstash (rediss://)
+    if (parsed.protocol === 'rediss:') opts.tls = {};
+    return opts;
+  } catch {
+    return { host: '127.0.0.1', port: 6379 };
+  }
+}
+
 function setupWebhookQueue(io) {
   const redis = getRedis();
   if (!redis) {
@@ -14,7 +35,8 @@ function setupWebhookQueue(io) {
     return;
   }
 
-  reviewQueue = new Bull('code-review', { redis: { port: 6379, host: '127.0.0.1' } });
+  const redisOpts = parseRedisUrl(process.env.REDIS_URL || 'redis://127.0.0.1:6379');
+  reviewQueue = new Bull('code-review', { redis: redisOpts });
 
   reviewQueue.process('run-review', 3, async (job) => {
     const { reviewId } = job.data;
@@ -39,15 +61,15 @@ function setupWebhookQueue(io) {
         files: review.filesChanged,
       });
 
-      // Ensure issues array exists to avoid runtime errors when counting
       result.issues = result.issues || [];
 
-      // Count by severity
       const errorCount = result.issues.filter(i => i.severity === 'error').length;
       const warningCount = result.issues.filter(i => i.severity === 'warning').length;
       const infoCount = result.issues.filter(i => i.severity === 'info').length;
 
-      // Persist results; include raw AI response/error when present for debugging
+      // Guard against null riskScore to prevent NaN in qualityScore
+      const safeRiskScore = typeof result.riskScore === 'number' ? result.riskScore : 0;
+
       const summaryText = result.summary || (result._rawAIError ? `AI parse error: ${result._rawAIError}` : 'No summary generated');
       await Review.findByIdAndUpdate(reviewId, {
         status: 'completed',
@@ -66,20 +88,19 @@ function setupWebhookQueue(io) {
         aiModelsUsed: [process.env.OPENROUTER_MODEL || 'anthropic/claude-sonnet-4'],
         rawAIResponse: result._rawAIResponse || result.rawAIResponse || undefined,
         rawAIError: result._rawAIError || result.rawAIError || undefined,
-        errorMessage: (!result.issues || result.issues.length === 0) && result._rawAIError ? `AI parse error: ${result._rawAIError}` : undefined,
+        errorMessage: (!result.issues || result.issues.length === 0) && result._rawAIError
+          ? `AI parse error: ${result._rawAIError}` : undefined,
       });
 
-      // Update repo stats
       await Repository.findByIdAndUpdate(repo._id, {
         $inc: { totalReviews: 1, openIssues: result.issues.length },
       });
 
-      // Update user stats
+      // Use safe risk score so qualityScore is never NaN
       await User.findByIdAndUpdate(review.requestedBy, {
-        $inc: { reviewCount: 1, qualityScore: Math.max(0, 100 - result.riskScore) },
+        $inc: { reviewCount: 1, qualityScore: Math.max(0, 100 - safeRiskScore) },
       });
 
-      // Emit completion
       io?.to(`user-${review.requestedBy}`).emit('review:completed', {
         reviewId,
         totalIssues: result.issues.length,
@@ -108,7 +129,6 @@ function setupWebhookQueue(io) {
 async function enqueueReview(reviewId) {
   if (!reviewQueue) {
     // Fallback: run synchronously without queue
-    const { runAIReview: run } = require('./aiService');
     setTimeout(() => processReviewDirectly(reviewId), 100);
     return;
   }
@@ -122,13 +142,12 @@ async function enqueueReview(reviewId) {
 
 // Fallback direct processing (no Redis)
 async function processReviewDirectly(reviewId) {
-  const { runAIReview } = require('./aiService');
   const review = await Review.findById(reviewId).populate('repository');
   if (!review) return;
 
   await Review.findByIdAndUpdate(reviewId, { status: 'processing' });
 
-    try {
+  try {
     const result = await runAIReview({
       diff: review.diffContent || '',
       repoContext: review.repository?.codebaseMemory?.architectureNotes || '',
@@ -141,7 +160,9 @@ async function processReviewDirectly(reviewId) {
     const warningCount = result.issues.filter(i => i.severity === 'warning').length;
     const infoCount = result.issues.filter(i => i.severity === 'info').length;
 
-    // Persist results for direct processing path (no queue)
+    // Guard against null riskScore
+    const safeRiskScore = typeof result.riskScore === 'number' ? result.riskScore : 0; // eslint-disable-line no-unused-vars
+
     const summaryText = result.summary || (result._rawAIError ? `AI parse error: ${result._rawAIError}` : 'No summary generated');
     await Review.findByIdAndUpdate(reviewId, {
       status: 'completed',
@@ -156,7 +177,8 @@ async function processReviewDirectly(reviewId) {
       aiModelsUsed: [process.env.OPENROUTER_MODEL || 'anthropic/claude-sonnet-4'],
       rawAIResponse: result._rawAIResponse || result.rawAIResponse || undefined,
       rawAIError: result._rawAIError || result.rawAIError || undefined,
-      errorMessage: (!result.issues || result.issues.length === 0) && result._rawAIError ? `AI parse error: ${result._rawAIError}` : undefined,
+      errorMessage: (!result.issues || result.issues.length === 0) && result._rawAIError
+        ? `AI parse error: ${result._rawAIError}` : undefined,
     });
   } catch (err) {
     await Review.findByIdAndUpdate(reviewId, { status: 'failed', errorMessage: err.message });
