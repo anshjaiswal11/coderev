@@ -6,11 +6,35 @@ const auth = require('../middleware/auth');
 
 const router = express.Router();
 
+function getFrontendUrl(req) {
+  if (process.env.FRONTEND_URL) return process.env.FRONTEND_URL;
+
+  const origin = req.headers.origin;
+  if (origin) return origin;
+
+  const referer = req.headers.referer;
+  if (referer) {
+    try {
+      return new URL(referer).origin;
+    } catch {
+      // Ignore invalid referer values
+    }
+  }
+
+  return 'http://localhost:5173';
+}
+
+function getGithubCallbackUrl(req) {
+  if (process.env.GITHUB_CALLBACK_URL) return process.env.GITHUB_CALLBACK_URL;
+  return `${req.protocol}://${req.get('host')}/api/auth/github/callback`;
+}
+
 // Step 1: Redirect to GitHub OAuth
 router.get('/github', (req, res) => {
+  const callbackUrl = getGithubCallbackUrl(req);
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_CLIENT_ID,
-    redirect_uri: process.env.GITHUB_CALLBACK_URL,
+    redirect_uri: callbackUrl,
     scope: 'read:user user:email repo',
     state: Math.random().toString(36).substring(7),
   });
@@ -20,9 +44,11 @@ router.get('/github', (req, res) => {
 // Step 2: GitHub OAuth callback
 router.get('/github/callback', async (req, res) => {
   const { code, error } = req.query;
+  const frontendUrl = getFrontendUrl(req);
+  const callbackUrl = getGithubCallbackUrl(req);
 
   if (error || !code) {
-    return res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_denied`);
+    return res.redirect(`${frontendUrl}/login?error=oauth_denied`);
   }
 
   try {
@@ -33,7 +59,7 @@ router.get('/github/callback', async (req, res) => {
         client_id: process.env.GITHUB_CLIENT_ID,
         client_secret: process.env.GITHUB_CLIENT_SECRET,
         code,
-        redirect_uri: process.env.GITHUB_CALLBACK_URL,
+        redirect_uri: callbackUrl,
       },
       { headers: { Accept: 'application/json' } }
     );
@@ -78,10 +104,10 @@ router.get('/github/callback', async (req, res) => {
     );
 
     // Redirect to frontend with token
-    res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${token}`);
+    res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
   } catch (err) {
     console.error('GitHub OAuth error:', err.message);
-    res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_failed`);
+    res.redirect(`${frontendUrl}/login?error=oauth_failed`);
   }
 });
 // Get current user

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import api from '../lib/api';
+import api, { API_BASE_URL } from '../lib/api';
 
 const AuthContext = createContext(null);
 
@@ -23,7 +23,7 @@ export function AuthProvider({ children }) {
   useEffect(() => { fetchMe(); }, [fetchMe]);
 
   const loginWithGitHub = () => {
-    window.location.href = '/api/auth/github';
+    window.location.href = `${API_BASE_URL}/api/auth/github`;
   };
 
   const logout = async () => {
