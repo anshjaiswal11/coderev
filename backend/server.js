@@ -119,12 +119,29 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 
 const PORT = process.env.PORT || 5000;
 
-async function startServer() {
+async function initializeServices() {
   try {
     await connectDB();
     initSupabase();
     await initRedis();
     setupWebhookQueue(io);
+  } catch (error) {
+    console.error('Service initialization warning:', error);
+
+    if (!process.env.VERCEL) {
+      throw error;
+    }
+  }
+}
+
+async function startServer() {
+  try {
+    await initializeServices();
+
+    if (process.env.VERCEL) {
+      console.log('Vercel runtime detected; skipping long-lived server startup.');
+      return;
+    }
 
     server.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
@@ -132,10 +149,13 @@ async function startServer() {
     });
   } catch (error) {
     console.error('Failed to start server:', error);
-    process.exit(1);
+
+    if (!process.env.VERCEL) {
+      process.exit(1);
+    }
   }
 }
 
 startServer();
 
-module.exports = { app, io };
+module.exports = app;
