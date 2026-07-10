@@ -84,7 +84,6 @@ router.get('/github/callback', async (req, res) => {
     res.redirect(`${process.env.FRONTEND_URL}/login?error=oauth_failed`);
   }
 });
-
 // Get current user
 router.get('/me', auth, async (req, res) => {
   try {
@@ -101,7 +100,7 @@ router.get('/me', auth, async (req, res) => {
 router.patch('/settings', auth, async (req, res) => {
   try {
     const { customPrompt, mutedCategories, strictMode } = req.body;
-    
+
     // We add strictMode to settings if we want to store it, 
     // but the User model doesn't explicitly have it. We can add it dynamically or update existing fields.
     const updateData = {
@@ -110,11 +109,11 @@ router.patch('/settings', auth, async (req, res) => {
         mutedCategories: mutedCategories || [],
       }
     };
-    
+
     const user = await User.findByIdAndUpdate(req.user._id, updateData, { new: true })
       .populate('badges')
       .lean();
-      
+
     // Return updated user object
     res.json({ user: { ...user, githubToken: undefined, settings: { strictMode, customPrompt, mutedCategories } } });
   } catch (err) {
