@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: 'https://coderev-backend.vercel.app/api',
   withCredentials: true,
   timeout: 120000, // 2-minute timeout to handle long-running AI requests
 });
