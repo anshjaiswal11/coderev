@@ -68,7 +68,7 @@ function formatNeuralSummary(text) {
   return cleaned.slice(0, 2000);
 }
 
-function IssueCard({ issue, reviewId, onUpdate }) {
+function IssueCard({ issue, reviewId, onUpdate, onOpenPatchModal }) {
   const [expanded, setExpanded] = useState(false);
   const meta = CATEGORY_META[issue.category] || CATEGORY_META.bug;
   const Icon = meta.icon;
@@ -210,6 +210,16 @@ function IssueCard({ issue, reviewId, onUpdate }) {
                 >
                   Ignored
                 </button>
+
+                {issue.patchCode && (
+                  <button
+                    onClick={() => onOpenPatchModal(issue.file, issue.patchCode)}
+                    className="flex items-center gap-2 px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-sm font-semibold transition-all hover:shadow-[0_0_15px_rgba(16,185,129,0.15)]"
+                  >
+                    <GitPullRequest size={15} />
+                    Create PR Request
+                  </button>
+                )}
                 
                 {!issue.patchCode && (
                   <button
@@ -239,6 +249,12 @@ export default function ReviewDetailPage() {
   const [activeTab, setActiveTab] = useState('issues');
   const [patchModalOpen, setPatchModalOpen] = useState(false);
   const [currentPatch, setCurrentPatch] = useState(null);
+  const [showDebug, setShowDebug] = useState(false);
+
+  const handleOpenPatchModal = (filePath, content) => {
+    setCurrentPatch({ filePath, patch: content });
+    setPatchModalOpen(true);
+  };
 
   const { data, isLoading } = useQuery({
     queryKey: ['review', id],
@@ -418,6 +434,23 @@ export default function ReviewDetailPage() {
         </div>
       )}
 
+      {review && review.rawAIError && (
+        <div className="glass-card p-6 mb-8 border-amber-500/30 bg-amber-500/5 relative overflow-hidden my-6">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center border border-amber-500/20 flex-shrink-0 mt-1">
+              <AlertTriangle size={24} className="text-amber-400" />
+            </div>
+            <div>
+              <h3 className="text-lg font-display font-bold text-amber-200 mb-1">AI Response Parsing Warning</h3>
+              <p className="text-sm text-slate-300 leading-relaxed font-light font-sans">
+                The AI completed the analysis, but its response was not in the expected structured JSON format. 
+                You can still read the raw generated review details using the **Show Debug Response** button at the bottom of the page.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {review.status === 'completed' && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
           
@@ -506,25 +539,36 @@ export default function ReviewDetailPage() {
 
           {/* Raw AI response (debug) */}
           {(review.rawAIResponse || review.rawAIError) && (
-            <div className="glass-card p-6 mb-8 border-white/5">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center border border-white/5">
-                  <Code2 size={16} className="text-slate-300" />
+            <div className="mt-8 mb-8">
+              <button
+                onClick={() => setShowDebug(!showDebug)}
+                className="text-xs text-white/40 hover:text-white/60 flex items-center gap-1.5 transition-colors border border-white/10 px-3 py-1.5 rounded-lg hover:border-white/20 bg-surface-900/50"
+              >
+                {showDebug ? 'Hide Debug Response' : 'Show Debug Response'}
+              </button>
+
+              {showDebug && (
+                <div className="glass-card p-6 mt-4 border-white/5">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center border border-white/5">
+                      <Code2 size={16} className="text-slate-300" />
+                    </div>
+                    <h3 className="text-md font-display font-semibold text-slate-200">AI Raw Response (debug)</h3>
+                  </div>
+                  {review.rawAIError && (
+                    <p className="text-sm font-mono text-rose-300 mb-3">Parse error: {review.rawAIError}</p>
+                  )}
+                  <div className="rounded-xl overflow-hidden border border-white/[0.06] bg-[#0b0c0e]">
+                    <SyntaxHighlighter
+                      language="text"
+                      style={atomOneDark}
+                      customStyle={{ background: 'transparent', padding: '16px', fontSize: '12px', margin: 0, lineHeight: 1.4, fontFamily: 'Fira Code, monospace' }}
+                    >
+                      {review.rawAIResponse || 'No raw response available'}
+                    </SyntaxHighlighter>
+                  </div>
                 </div>
-                <h3 className="text-md font-display font-semibold text-slate-200">AI Raw Response (debug)</h3>
-              </div>
-              {review.rawAIError && (
-                <p className="text-sm font-mono text-rose-300 mb-3">Parse error: {review.rawAIError}</p>
               )}
-              <div className="rounded-xl overflow-hidden border border-white/[0.06] bg-[#0b0c0e]">
-                <SyntaxHighlighter
-                  language="text"
-                  style={atomOneDark}
-                  customStyle={{ background: 'transparent', padding: '16px', fontSize: '12px', margin: 0, lineHeight: 1.4, fontFamily: 'Fira Code, monospace' }}
-                >
-                  {review.rawAIResponse || 'No raw response available'}
-                </SyntaxHighlighter>
-              </div>
             </div>
           )}
 
@@ -639,7 +683,7 @@ export default function ReviewDetailPage() {
                   ) : (
                     <motion.div layout className="space-y-4">
                       {filteredIssues.map(issue => (
-                        <IssueCard key={issue._id} issue={issue} reviewId={id} onUpdate={refetch} />
+                        <IssueCard key={issue._id} issue={issue} reviewId={id} onUpdate={refetch} onOpenPatchModal={handleOpenPatchModal} />
                       ))}
                     </motion.div>
                   )}
