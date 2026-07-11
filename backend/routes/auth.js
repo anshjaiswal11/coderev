@@ -10,12 +10,15 @@ function getFrontendUrl(req) {
   if (process.env.FRONTEND_URL) return process.env.FRONTEND_URL;
 
   const origin = req.headers.origin;
-  if (origin) return origin;
+  if (origin && !origin.includes('github.com')) return origin;
 
   const referer = req.headers.referer;
   if (referer) {
     try {
-      return new URL(referer).origin;
+      const parsedUrl = new URL(referer);
+      if (parsedUrl.hostname !== 'github.com' && !parsedUrl.hostname.endsWith('.github.com')) {
+        return parsedUrl.origin;
+      }
     } catch {
       // Ignore invalid referer values
     }
@@ -107,6 +110,9 @@ router.get('/github/callback', async (req, res) => {
     res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
   } catch (err) {
     console.error('GitHub OAuth error:', err.message);
+    if (err.response && err.response.data) {
+      console.error('GitHub OAuth error response data:', err.response.data);
+    }
     res.redirect(`${frontendUrl}/login?error=oauth_failed`);
   }
 });
