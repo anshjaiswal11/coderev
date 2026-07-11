@@ -460,7 +460,64 @@ async function runRepoReview({ repoName, files = [], repoContext = '', styleGuid
       { role: 'system', content: REVIEW_SYSTEM_PROMPT },
       {
         role: 'user',
-        content: `Repository: ${repoName}\nRepository context:\n${repoContext || 'None'}\nStyle guide:\n${styleGuide || 'Default'}\n\nFiles snapshot:\n\n${chunk}\n\nPlease review these files and return a single JSON matching the schema used by runAIReview (summary, riskScore, riskFactors, issues, secretsDetected, suggestedTests, complianceFlags).`,
+        content: `Repository: ${repoName}
+Repository context:
+${repoContext || 'None'}
+
+Style guide:
+${styleGuide || 'Default'}
+
+Files snapshot to analyze:
+${chunk}
+
+Review these files and return a single valid JSON object matching this exact schema:
+{
+  "summary": "2-3 sentence overall assessment of these files",
+  "rating": <0-100 integer, 100 = best quality>,
+  "suggestedChanges": [
+    { "type": "security|performance|refactor|test|style", "title": "short", "description": "detailed", "codeExample": "optional code snippet" }
+  ],
+  "riskScore": <0-100 integer, 100 = most risky>,
+  "riskFactors": {
+    "blastRadius": <number of files affected>,
+    "complexity": <complexity delta 0-10>,
+    "churnScore": <0-10>,
+    "securityFlags": <count of security issues>
+  },
+  "issues": [
+    {
+      "file": "path/to/file.js",
+      "line": <line number>,
+      "endLine": <optional end line>,
+      "category": "bug|security|performance|style|best-practice|test|complexity",
+      "severity": "error|warning|info",
+      "title": "Short title",
+      "description": "Detailed explanation of the issue",
+      "suggestion": "How to fix it",
+      "patchCode": "Ready-to-use fixed code snippet (optional)",
+      "owaspCategory": "A01-A10 if applicable (optional)",
+      "cweid": "CWE-XXX if applicable (optional)"
+    }
+  ],
+  "secretsDetected": [
+    {
+      "file": "path",
+      "line": <line>,
+      "type": "API_KEY|PASSWORD|TOKEN|etc",
+      "masked": "sk-****"
+    }
+  ],
+  "suggestedTests": [
+    {
+      "functionName": "name",
+      "testCode": "test code here",
+      "framework": "jest|mocha|etc"
+    }
+  ],
+  "complianceFlags": []
+}
+
+Respond with ONLY valid JSON. Do not write any explanations before or after the JSON.`,
       },
     ];
 
