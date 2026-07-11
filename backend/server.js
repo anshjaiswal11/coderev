@@ -78,7 +78,18 @@ app.use('/api/badges', badgeRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  const mongoose = require('mongoose');
+  const dbState = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    db: dbState[mongoose.connection.readyState] || 'unknown',
+    env: process.env.NODE_ENV || 'development',
+    mongoUri: process.env.MONGODB_URI ? '✅ set' : '❌ missing',
+    openrouterKey: process.env.OPENROUTER_API_KEY ? '✅ set' : '❌ missing',
+    jwtSecret: process.env.JWT_SECRET ? '✅ set' : '❌ using dev-secret',
+    frontendUrl: process.env.FRONTEND_URL || '(not set)',
+  });
 });
 
 // WebSocket connection handling
@@ -115,18 +126,18 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 const PORT = process.env.PORT || 5000;
 
 async function initializeServices() {
+  // Connect to MongoDB — errors are logged but don't kill Vercel
   try {
     await connectDB();
-    initSupabase();
-    await initRedis();
-    setupWebhookQueue(io);
   } catch (error) {
-    console.error('Service initialization warning:', error);
-
-    if (!process.env.VERCEL) {
-      throw error;
-    }
+    console.error('⚠️  MongoDB failed to connect:', error.message);
+    if (!process.env.VERCEL) throw error;
   }
+
+  // Optional services — always try, never throw
+  try { initSupabase(); } catch (e) { console.warn('Supabase init warning:', e.message); }
+  try { await initRedis(); } catch (e) { console.warn('Redis init warning:', e.message); }
+  try { setupWebhookQueue(io); } catch (e) { console.warn('Queue init warning:', e.message); }
 }
 
 async function startServer() {

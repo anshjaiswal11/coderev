@@ -51,8 +51,9 @@ router.get('/', auth, async (req, res) => {
   try {
     const repos = await Repository.find({ owner: req.user._id, active: true })
       .sort({ updatedAt: -1 }).lean();
-    res.json({ repos });
+    res.json({ repos: repos || [] });
   } catch (err) {
+    console.error('GET /repos error:', err.message, err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -61,9 +62,15 @@ router.get('/', auth, async (req, res) => {
 router.post('/connect', auth, async (req, res) => {
   try {
     const { fullName } = req.body;
+    if (!fullName || !fullName.includes('/')) {
+      return res.status(400).json({ error: 'fullName must be in owner/repo format' });
+    }
     const [owner, name] = fullName.split('/');
 
     const user = await User.findById(req.user._id).select('+githubToken').lean();
+    if (!user?.githubToken) {
+      return res.status(401).json({ error: 'GitHub token missing. Please re-authenticate.' });
+    }
     const gh = new GitHubService(user.githubToken);
     const ghRepo = await gh.getRepo(owner, name);
 
@@ -86,6 +93,7 @@ router.post('/connect', auth, async (req, res) => {
 
     res.json({ repo });
   } catch (err) {
+    console.error('POST /repos/connect error:', err.message, err.response?.data || '');
     res.status(500).json({ error: err.message });
   }
 });

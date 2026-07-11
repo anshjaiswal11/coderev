@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
+import { API_BASE_URL } from '../lib/api';
 
 const SocketContext = createContext(null);
 
@@ -12,7 +13,7 @@ export function SocketProvider({ children }) {
   useEffect(() => {
     if (!user) return;
 
-    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:5000', {
+    const socket = io(API_BASE_URL, {
       transports: ['websocket', 'polling'],
       auth: { token: localStorage.getItem('token') },
     });
