@@ -54,9 +54,12 @@ class GitHubService {
   }
 
   async getFileContent(owner, repo, path, ref) {
-    const res = await this.client.get(`/repos/${owner}/${repo}/contents/${path}`, {
+    const res = await this.client.get(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
       params: ref ? { ref } : {},
     });
+    // GitHub may return an array for directories; handle gracefully
+    if (Array.isArray(res.data)) throw new Error(`${path} is a directory, not a file`);
+    if (!res.data.content) throw new Error(`No content returned for ${path}`);
     return Buffer.from(res.data.content, 'base64').toString('utf8');
   }
 
@@ -100,6 +103,9 @@ class GitHubService {
     const res = await this.client.get(`/repos/${owner}/${repo}/git/trees/${encodeURIComponent(ref)}`, {
       params: { recursive: 1 },
     });
+    if (res.data.truncated) {
+      console.warn(`getRepoTree: tree is truncated for ${owner}/${repo}@${ref} — only partial file list returned`);
+    }
     return res.data;
   }
 

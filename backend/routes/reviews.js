@@ -99,30 +99,50 @@ router.post('/:id/create-pr', auth, async (req, res) => {
 router.post('/repo-scan', auth, async (req, res) => {
   try {
     const { repoId, ref } = req.body;
+    if (!repoId) return res.status(400).json({ error: 'repoId is required' });
+
     const repo = await Repository.findOne({ _id: repoId, owner: req.user._id });
     if (!repo) return res.status(404).json({ error: 'Repository not found' });
 
     const user = await User.findById(req.user._id).select('+githubToken').lean();
+    if (!user?.githubToken) return res.status(401).json({ error: 'GitHub token missing. Please re-authenticate.' });
+
     const gh = new GitHubService(user.githubToken);
     const [owner, name] = repo.fullName.split('/');
+    const branch = ref || repo.defaultBranch || 'main';
 
-    // Get tree and fetch files (skip very large files and binaries)
-    const tree = await gh.getRepoTree(owner, name, ref || repo.defaultBranch || 'HEAD');
+    // Get tree and fetch files (skip very large files, binaries, and lock files)
+    let tree;
+    try {
+      tree = await gh.getRepoTree(owner, name, branch);
+    } catch (treeErr) {
+      return res.status(400).json({ error: `Could not fetch repo tree for branch "${branch}": ${treeErr.message}` });
+    }
+
+    const SKIP_PATTERNS = /node_modules|.git|\.lock$|\.min\.|package-lock\.json|yarn\.lock|\.map$|\.svg$|\.png$|\.jpg$|\.jpeg$|\.gif$|\.ico$|\.woff|\.ttf|\.eot|\.pdf|\.zip|\.tar|\.gz|dist\/|build\/|\.d\.ts$|pnpm-lock/i;
+    const MAX_FILES = 80;
+    const MAX_FILE_SIZE = 80000; // 80KB per file
+
+    const blobs = (tree?.tree || []).filter(item =>
+      item.type === 'blob' &&
+      (!item.size || item.size <= MAX_FILE_SIZE) &&
+      !SKIP_PATTERNS.test(item.path)
+    ).slice(0, MAX_FILES);
+
     const files = [];
-    if (tree && tree.tree) {
-      for (const item of tree.tree) {
-        if (item.type !== 'blob') continue;
-        // skip large files
-        if (item.size && item.size > 150000) continue;
-        try {
-          const content = await gh.getFileContent(owner, name, item.path, ref || repo.defaultBranch);
-          // basic binary check
-          if (typeof content !== 'string') continue;
+    for (const item of blobs) {
+      try {
+        const content = await gh.getFileContent(owner, name, item.path, branch);
+        if (typeof content === 'string' && content.trim().length > 0) {
           files.push({ path: item.path, content });
-        } catch (e) {
-          // ignore failures to fetch individual files
         }
+      } catch (e) {
+        // ignore failures to fetch individual files (permissions, encoding, etc.)
       }
+    }
+
+    if (files.length === 0) {
+      return res.status(422).json({ error: 'No readable source files found in this repository branch.' });
     }
 
     // Create a pending Review document and run the heavy AI work in background
@@ -130,7 +150,8 @@ router.post('/repo-scan', auth, async (req, res) => {
       repository: repo._id,
       requestedBy: req.user._id,
       prTitle: `Repo scan: ${repo.fullName}`,
-      diffContent: `Repo snapshot with ${files.length} files (truncated)`,
+      branch,
+      diffContent: `Repo snapshot with ${files.length} files`,
       filesChanged: files.map(f => f.path),
       status: 'pending',
       totalIssues: 0,
@@ -143,10 +164,19 @@ router.post('/repo-scan', auth, async (req, res) => {
     (async () => {
       try {
         const aiService = require('../services/aiService');
-        const result = await aiService.runRepoReview({ repoName: repo.fullName, files, repoContext: repo.codebaseMemory?.architectureNotes || '' });
+        const result = await aiService.runRepoReview({
+          repoName: repo.fullName,
+          files,
+          repoContext: repo.codebaseMemory?.architectureNotes || '',
+        });
 
-        // Persist results (provide fallback summary if AI didn't emit one)
-        const summaryText = result.summary || (result._rawAIError ? `AI parse error: ${result._rawAIError}` : 'No summary generated');
+        const summaryText = result.summary ||
+          (result._rawAIError ? `AI parse error: ${result._rawAIError}` : 'No summary generated');
+
+        const errorCount = (result.issues || []).filter(i => i.severity === 'error').length;
+        const warningCount = (result.issues || []).filter(i => i.severity === 'warning').length;
+        const infoCount = (result.issues || []).filter(i => i.severity === 'info').length;
+
         await Review.findByIdAndUpdate(review._id, {
           status: 'completed',
           issues: result.issues || [],
@@ -157,6 +187,9 @@ router.post('/repo-scan', auth, async (req, res) => {
           secretsDetected: result.secretsDetected || [],
           complianceFlags: result.complianceFlags || [],
           totalIssues: (result.issues || []).length,
+          errorCount,
+          warningCount,
+          infoCount,
           rawAIResponse: result._rawAIResponse || result.rawAIResponse || undefined,
           rawAIError: result._rawAIError || result.rawAIError || undefined,
           aiRating: result.aiRating,
@@ -165,31 +198,44 @@ router.post('/repo-scan', auth, async (req, res) => {
 
         // Update repository memory / stats
         repo.codebaseMemory = repo.codebaseMemory || {};
-        repo.codebaseMemory.architectureNotes = (result.architectureNotes || repo.codebaseMemory.architectureNotes || '').slice(0, 4000);
+        repo.codebaseMemory.architectureNotes = (
+          result.architectureNotes || repo.codebaseMemory.architectureNotes || ''
+        ).slice(0, 4000);
         repo.codebaseMemory.lastAnalyzed = new Date();
         await repo.save();
 
-        // Emit websocket event so clients update (join-user or join-review)
+        // Emit websocket event so clients update
         try {
           const io = req.app.get('io');
-          io?.to(`user-${req.user._id}`).emit('review:completed', { reviewId: review._id.toString(), totalIssues: (result.issues || []).length, riskScore: result.riskScore, summary: summaryText });
-          io?.to(`review-${review._id.toString()}`).emit('review:completed', { reviewId: review._id.toString(), totalIssues: (result.issues || []).length, riskScore: result.riskScore, summary: summaryText });
+          const payload = {
+            reviewId: review._id.toString(),
+            totalIssues: (result.issues || []).length,
+            riskScore: result.riskScore,
+            summary: summaryText,
+          };
+          io?.to(`user-${req.user._id}`).emit('review:completed', payload);
+          io?.to(`review-${review._id.toString()}`).emit('review:completed', payload);
         } catch (emitErr) {
           console.warn('Failed to emit review:completed websocket event', emitErr.message);
         }
       } catch (bgErr) {
         console.error('Background repo-scan failed:', bgErr.message);
-        await Review.findByIdAndUpdate(review._id, { status: 'failed', errorMessage: bgErr.message });
+        await Review.findByIdAndUpdate(review._id, {
+          status: 'failed',
+          errorMessage: bgErr.message,
+        });
         try {
           const io = req.app.get('io');
-          io?.to(`user-${req.user._id}`).emit('review:failed', { reviewId: review._id.toString(), error: bgErr.message });
-          io?.to(`review-${review._id.toString()}`).emit('review:failed', { reviewId: review._id.toString(), error: bgErr.message });
+          const errPayload = { reviewId: review._id.toString(), error: bgErr.message };
+          io?.to(`user-${req.user._id}`).emit('review:failed', errPayload);
+          io?.to(`review-${review._id.toString()}`).emit('review:failed', errPayload);
         } catch (emitErr) {
           console.warn('Failed to emit review:failed websocket event', emitErr.message);
         }
       }
     })();
   } catch (err) {
+    console.error('repo-scan route error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

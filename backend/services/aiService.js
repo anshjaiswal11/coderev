@@ -19,7 +19,7 @@ let lastResetTime = Date.now();
  * OpenRouter uses an OpenAI-compatible format.
  */
 async function callOpenRouter(messages, { model, maxTokens = 4000, temperature = 0.2 } = {}) {
-  const apiKey = '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';
+  const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is not set in environment variables');
 
   let response;
