@@ -124,8 +124,9 @@ export default function RepositoriesPage() {
 
                       <div className="grid grid-cols-2 gap-2 pt-4 border-t border-white/[0.04]">
                         <button
-                          onClick={() => { setSelectedRepo(repo); setScanModalOpen(true); }}
-                          className="px-3 py-2 bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 rounded-lg text-xs font-semibold flex items-center gap-2 justify-center transition-colors border border-brand-500/20"
+                          onClick={() => { if (!scanModalOpen) { setSelectedRepo(repo); setScanModalOpen(true); } }}
+                          disabled={scanModalOpen && selectedRepo?._id === repo._id}
+                          className="px-3 py-2 bg-brand-500/10 hover:bg-brand-500/20 text-brand-300 rounded-lg text-xs font-semibold flex items-center gap-2 justify-center transition-colors border border-brand-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <Play size={13} className="fill-brand-400" /> Base Scan
                         </button>
@@ -227,6 +228,7 @@ export default function RepositoriesPage() {
         <RepoScanModal
           repo={selectedRepo}
           onClose={() => setScanModalOpen(false)}
+          onComplete={() => qc.invalidateQueries({ queryKey: ['repositories'] })}
         />
       )}
     </div>

@@ -243,8 +243,13 @@ export default function ReviewDetailPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['review', id],
     queryFn: () => api.get(`/reviews/${id}`),
-    refetchInterval: (data) =>
-      ['pending', 'processing'].includes(data?.review?.status) ? 3000 : false,
+    // TanStack Query v5: refetchInterval callback receives { state } not data directly
+    refetchInterval: ({ state }) => {
+      const status = state?.data?.review?.status;
+      return ['pending', 'processing'].includes(status) ? 4000 : false;
+    },
+    refetchIntervalInBackground: true,
+    staleTime: 0,
   });
 
   useEffect(() => {
@@ -352,15 +357,24 @@ export default function ReviewDetailPage() {
               <div className="w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full animate-spin" />
             </div>
             <h3 className="text-2xl font-display font-bold text-slate-100 mb-2">
-              {review.status === 'pending' ? 'Compiler Queued...' : 'Neural Engine Analyzing...'}
+              {review.status === 'pending' ? 'Scan Queued…' : 'AI Analyzing Repository…'}
             </h3>
-            <p className="text-slate-400 font-light mb-8 max-w-sm mx-auto">Allocating compute matrix and analyzing deep repository context. This takes roughly 15-30 seconds.</p>
+            <p className="text-slate-400 font-light mb-2 max-w-sm mx-auto">AI is analyzing your repository files. For large repos this can take 1–3 minutes.</p>
+            <p className="text-slate-500 text-xs font-light mb-8 max-w-sm mx-auto">This page auto-refreshes every 4 seconds. If it seems stuck, click the button below.</p>
             
-            <div className="flex justify-center gap-3">
-              {[0,1,2].map(i => (
-                <div key={i} className="w-2 h-2 rounded-full bg-brand-500 animate-pulse-slow shadow-[0_0_10px_rgba(99,102,241,0.8)]"
-                     style={{ animationDelay: `${i * 300}ms` }} />
-              ))}
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex justify-center gap-3">
+                {[0,1,2].map(i => (
+                  <div key={i} className="w-2 h-2 rounded-full bg-brand-500 animate-pulse-slow shadow-[0_0_10px_rgba(99,102,241,0.8)]"
+                       style={{ animationDelay: `${i * 300}ms` }} />
+                ))}
+              </div>
+              <button
+                onClick={refetch}
+                className="text-xs text-white/30 hover:text-white/60 flex items-center gap-1.5 transition-colors border border-white/10 px-3 py-1.5 rounded-lg hover:border-white/20 bg-surface-900/50"
+              >
+                <RefreshCw size={12} /> Check status now
+              </button>
             </div>
           </div>
         </motion.div>

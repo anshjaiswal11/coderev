@@ -6,7 +6,8 @@ const path = require('path');
 
 // ─── OpenRouter Configuration ────────────────────────────────────────────────
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
-const DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
+// Use env var if set, else fall back to a reliable free model known to return valid JSON
+const DEFAULT_MODEL = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp:free';
 
 // Rate limiting
 const ratelimitResetTime = 60 * 1000; // 1 minute
@@ -463,7 +464,7 @@ async function runRepoReview({ repoName, files = [], repoContext = '', styleGuid
       },
     ];
 
-    const text = await callOpenRouter(messages);
+    const text = await callOpenRouter(messages, { maxTokens: 6000 });
     let part = {};
     try {
       part = extractJSON(text);
