@@ -71,15 +71,25 @@ async function callOpenRouter(messages, { model, maxTokens = 4000, temperature =
   return content;
 }
 
-/**
- * Extract JSON from a text response (handles markdown code fences too).
- */
+function parseLooseJSON(str) {
+  try {
+    let cleaned = str.trim();
+    // Remove trailing commas in objects and arrays
+    cleaned = cleaned.replace(/,(\s*[\]}])/g, '$1');
+    // Remove single line comments
+    cleaned = cleaned.replace(/(?:^|[^:])\/\/.*$/g, '');
+    return JSON.parse(cleaned);
+  } catch (e) {
+    return JSON.parse(str); // Fall back to strict parse to preserve original error
+  }
+}
+
 function extractJSON(text) {
   // 1) Try fenced ```json blocks (common when model responds with markdown)
   const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/i);
   if (fenced) {
     try {
-      return JSON.parse(fenced[1].trim());
+      return parseLooseJSON(fenced[1]);
     } catch (e) {
       // fall through to more permissive extraction
     }
@@ -95,7 +105,7 @@ function extractJSON(text) {
       else if (ch === '}') depth--;
       if (depth === 0) {
         const candidate = text.slice(firstBrace, i + 1);
-        try { return JSON.parse(candidate); } catch (e) { break; }
+        try { return parseLooseJSON(candidate); } catch (e) { break; }
       }
     }
   }
@@ -110,22 +120,20 @@ function extractJSON(text) {
       else if (ch === ']') depth--;
       if (depth === 0) {
         const candidate = text.slice(firstBracket, i + 1);
-        try { return JSON.parse(candidate); } catch (e) { break; }
+        try { return parseLooseJSON(candidate); } catch (e) { break; }
       }
     }
   }
 
   const json_match = text.match(/({[\s\S]*})/);
   if (json_match) {
-    try { return JSON.parse(json_match[1]); } catch (e) { /* fall through */ }
+    try { return parseLooseJSON(json_match[1]); } catch (e) { /* fall through */ }
   }
-
-
 
   // 4) As a last resort, try a loose regex but non-greedy: grab the first { ... } block
   const loose = text.match(/\{[\s\S]*?\}/);
   if (loose) {
-    try { return JSON.parse(loose[0]); } catch (e) { /* fall through */ }
+    try { return parseLooseJSON(loose[0]); } catch (e) { /* fall through */ }
   }
 
   // If we get here, give a helpful error with a snippet of the model output for debugging
