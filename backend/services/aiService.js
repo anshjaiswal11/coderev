@@ -21,20 +21,26 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * Make a chat completion request to OpenRouter API.
  * OpenRouter uses an OpenAI-compatible format.
  */
-async function callOpenRouter(messages, { model, maxTokens = 4000, temperature = 0.2 } = {}) {
+async function callOpenRouter(messages, { model, maxTokens = 4000, temperature = 0.2, jsonMode = false } = {}) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is not set in environment variables');
+
+  const requestBody = {
+    model: model || DEFAULT_MODEL,
+    messages,
+    max_tokens: maxTokens,
+    temperature,
+  };
+
+  if (jsonMode) {
+    requestBody.response_format = { type: 'json_object' };
+  }
 
   let response;
   try {
     response = await axios.post(
       `${OPENROUTER_BASE_URL}/chat/completions`,
-      {
-        model: model || DEFAULT_MODEL,
-        messages,
-        max_tokens: maxTokens,
-        temperature,
-      },
+      requestBody,
       {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
@@ -285,7 +291,7 @@ Respond with ONLY valid JSON in this exact schema:
     { role: 'user', content: userPrompt },
   ];
 
-  let text = await callOpenRouter(messages);
+  let text = await callOpenRouter(messages, { jsonMode: true });
   let parsed;
   try {
     parsed = extractJSON(text);
@@ -300,7 +306,7 @@ Respond with ONLY valid JSON in this exact schema:
         { role: 'system', content: REVIEW_SYSTEM_PROMPT },
         { role: 'user', content: `The previous response could not be parsed as JSON. Here is the raw output:\n\n${text}\n\nPlease respond with ONLY valid JSON that matches the schema previously requested. Do not include any explanatory text.` },
       ];
-      const repairedText = await callOpenRouter(repairPrompt, { maxTokens: 2000 });
+      const repairedText = await callOpenRouter(repairPrompt, { maxTokens: 2000, jsonMode: true });
       try {
         parsed = extractJSON(repairedText);
       } catch (e2) {
@@ -395,7 +401,7 @@ async function generateSuggestedChange({ suggestion, files = [], repoName }) {
 \n\nPlease respond with ONLY a JSON object: { "filePath": "path/to/file", "patch": "code or diff snippet" }` },
   ];
 
-  const text = await callOpenRouter(messages, { maxTokens: 1500 });
+  const text = await callOpenRouter(messages, { maxTokens: 1500, jsonMode: true });
   try {
     return extractJSON(text);
   } catch (e) {
@@ -537,7 +543,7 @@ Respond with ONLY valid JSON. Do not write any explanations before or after the 
       },
     ];
 
-    const text = await callOpenRouter(messages, { maxTokens: 6000 });
+    const text = await callOpenRouter(messages, { maxTokens: 6000, jsonMode: true });
     let part = {};
     try {
       part = extractJSON(text);
