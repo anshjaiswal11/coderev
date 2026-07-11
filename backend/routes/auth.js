@@ -81,7 +81,7 @@ router.get('/github/callback', async (req, res) => {
     ]);
 
     const ghUser = profileRes.data;
-    const primaryEmail = emailsRes.data.find(e => e.primary)?.email || ghUser.email;
+    const primaryEmail = (Array.isArray(emailsRes.data) ? emailsRes.data.find(e => e.primary)?.email : null) || ghUser.email;
 
     // Upsert user in MongoDB
     const user = await User.findOneAndUpdate(

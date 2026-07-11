@@ -24,19 +24,16 @@ const app = express();
 app.set('trust proxy', 1);
 const server = http.createServer(app);
 
-const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:5173',
-  'http://localhost:5174',
-  'http://localhost:5175',
-];
+// Allow all origins dynamically to prevent CORS issues (needed for frontend/backend on separate domains)
+const corsOptions = {
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+};
 
 // Socket.IO setup
 const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
+  cors: corsOptions,
 });
 
 // Make io available to routes
@@ -58,10 +55,7 @@ app.use('/api/webhooks/github', express.raw({ type: 'application/json' }), (req,
 
 // Middleware
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true,
-}));
+app.use(cors(corsOptions));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 
