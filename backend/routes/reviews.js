@@ -9,12 +9,20 @@ const { generateAutoFix } = require('../services/aiService');
 
 const router = express.Router();
 
+function parseRepoFullName(fullName) {
+  const value = String(fullName || '').trim();
+  if (!/^[^/\s]+\/[^/\s]+$/.test(value)) {
+    throw new Error('Repository must be in owner/repo format');
+  }
+  return value.split('/');
+}
+
 // Generate code suggestion for a high-level suggested change
 router.post('/:id/suggest-change', auth, async (req, res) => {
   try {
     const { id } = req.params;
     const { suggestionIndex } = req.body;
-    const review = await Review.findById(id).populate('repository');
+    const review = await Review.findOne({ _id: id, requestedBy: req.user._id }).populate('repository');
     if (!review) return res.status(404).json({ error: 'Review not found' });
 
     const suggestion = (review.suggestedChanges || [])[suggestionIndex];
@@ -58,20 +66,26 @@ router.post('/:id/suggest-change', auth, async (req, res) => {
 router.post('/:id/create-pr', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { filePath, content, branchName, prTitle, prBody } = req.body;
+    const { filePath, content, branchName, prTitle, prBody, targetRepoFullName, targetBaseBranch } = req.body;
     if (!filePath || !content || !branchName || !prTitle) return res.status(400).json({ error: 'filePath, content, branchName and prTitle are required' });
+    if (!/^[A-Za-z0-9._/-]+$/.test(branchName) || branchName.includes('..') || branchName.startsWith('/') || branchName.endsWith('/')) {
+      return res.status(400).json({ error: 'Invalid branch name' });
+    }
 
-    const review = await Review.findById(id).populate('repository');
+    const review = await Review.findOne({ _id: id, requestedBy: req.user._id }).populate('repository');
     if (!review) return res.status(404).json({ error: 'Review not found' });
 
     const repo = review.repository;
     const user = await User.findById(review.requestedBy).select('+githubToken').lean();
+    if (!user?.githubToken) return res.status(401).json({ error: 'GitHub token missing. Please re-authenticate.' });
     const gh = new GitHubService(user.githubToken);
 
-    const [owner, name] = (repo.fullName || '').split('/');
+    const targetFullName = targetRepoFullName || repo.fullName;
+    const [owner, name] = parseRepoFullName(targetFullName);
+    const ghRepo = await gh.getRepo(owner, name);
 
     // Get base branch ref sha
-    const base = repo.defaultBranch || 'main';
+    const base = targetBaseBranch || ghRepo.default_branch || repo.defaultBranch || 'main';
     const baseRef = await gh.getRef(owner, name, `heads/${base}`);
     const baseSha = baseRef.object?.sha || baseRef?.sha;
 
@@ -85,7 +99,7 @@ router.post('/:id/create-pr', auth, async (req, res) => {
       // Create PR
       const pr = await gh.createPullRequest(owner, name, prTitle, branchName, base, prBody || 'Automated changes suggested by CodeRev');
 
-      return res.json({ pr });
+      return res.json({ pr, targetRepo: ghRepo.full_name, baseBranch: base });
     } catch (e) {
       console.error('create-pr failed:', e.response?.data || e.message || e);
       return res.status(500).json({ error: 'Failed to create pull request', details: e.response?.data || e.message || e.stack });
@@ -177,24 +191,31 @@ router.post('/repo-scan', auth, async (req, res) => {
         const warningCount = (result.issues || []).filter(i => i.severity === 'warning').length;
         const infoCount = (result.issues || []).filter(i => i.severity === 'info').length;
 
-        await Review.findByIdAndUpdate(review._id, {
-          status: 'completed',
-          issues: result.issues || [],
-          summary: summaryText,
-          riskScore: result.riskScore,
-          riskFactors: result.riskFactors || {},
-          suggestedTests: result.suggestedTests || [],
-          secretsDetected: result.secretsDetected || [],
-          complianceFlags: result.complianceFlags || [],
-          totalIssues: (result.issues || []).length,
-          errorCount,
-          warningCount,
-          infoCount,
-          rawAIResponse: result._rawAIResponse || result.rawAIResponse || undefined,
-          rawAIError: result._rawAIError || result.rawAIError || undefined,
-          aiRating: result.aiRating,
-          suggestedChanges: result.suggestedChanges || [],
-        });
+        const parseError = result._rawAIError || result.rawAIError;
+        const update = {
+          $set: {
+            status: 'completed',
+            issues: result.issues || [],
+            summary: summaryText,
+            riskScore: result.riskScore,
+            riskFactors: result.riskFactors || {},
+            suggestedTests: result.suggestedTests || [],
+            secretsDetected: result.secretsDetected || [],
+            complianceFlags: result.complianceFlags || [],
+            totalIssues: (result.issues || []).length,
+            errorCount,
+            warningCount,
+            infoCount,
+            rawAIResponse: result._rawAIResponse || result.rawAIResponse || '',
+            aiRating: result.aiRating,
+            suggestedChanges: result.suggestedChanges || [],
+          },
+          $unset: {},
+        };
+        if (parseError) update.$set.rawAIError = parseError;
+        else update.$unset.rawAIError = '';
+        if (!Object.keys(update.$unset).length) delete update.$unset;
+        await Review.findByIdAndUpdate(review._id, update);
 
         // Update repository memory / stats
         repo.codebaseMemory = repo.codebaseMemory || {};
@@ -346,7 +367,7 @@ router.get('/', auth, async (req, res) => {
 router.get('/:id', auth, async (req, res) => {
   try {
     const review = await Review.findOne({ _id: req.params.id, requestedBy: req.user._id })
-      .populate('repository', 'fullName name language htmlUrl')
+      .populate('repository', 'fullName name language htmlUrl defaultBranch')
       .lean();
     if (!review) return res.status(404).json({ error: 'Review not found' });
     res.json({ review });

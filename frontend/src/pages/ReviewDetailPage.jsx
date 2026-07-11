@@ -217,7 +217,7 @@ function IssueCard({ issue, reviewId, onUpdate, onOpenPatchModal }) {
                     className="flex items-center gap-2 px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-sm font-semibold transition-all hover:shadow-[0_0_15px_rgba(16,185,129,0.15)]"
                   >
                     <GitPullRequest size={15} />
-                    Create PR Request
+                    Create Pull Request
                   </button>
                 )}
                 
@@ -400,13 +400,22 @@ export default function ReviewDetailPage() {
         open={patchModalOpen}
         onClose={() => setPatchModalOpen(false)}
         initial={currentPatch}
-        onCreatePR={async ({ filePath, content }) => {
+        defaultRepoFullName={review.repository?.fullName || ''}
+        defaultBaseBranch={review.baseBranch || review.repository?.defaultBranch || 'main'}
+        onCreatePR={async ({ filePath, content, targetRepoFullName, targetBaseBranch }) => {
           try {
             const branch = window.prompt('Branch name to create (e.g. code-rev/fix-1)', `code-rev/fix-${Date.now()}`);
             if (!branch) return toast.error('Branch required');
             const prTitle = window.prompt('PR title', `Automated fix`) || `Automated fix`;
             toast.loading('Creating pull request...', { id: 'create-pr' });
-            const resp = await api.post(`/reviews/${review._id}/create-pr`, { filePath, content, branchName: branch, prTitle });
+            const resp = await api.post(`/reviews/${review._id}/create-pr`, {
+              filePath,
+              content,
+              branchName: branch,
+              prTitle,
+              targetRepoFullName,
+              targetBaseBranch,
+            });
             toast.dismiss('create-pr');
             toast.success('Pull request created');
             setPatchModalOpen(false);

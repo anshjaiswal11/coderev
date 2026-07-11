@@ -151,7 +151,7 @@ export default function RepositoriesPage() {
         <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
           <div className="glass-card p-6 sticky top-8">
             <h2 className="font-display font-bold text-slate-100 text-lg mb-1">Index New Workspace</h2>
-            <p className="text-slate-400 text-xs font-light mb-6">Search your GitHub account to establish a new context connection.</p>
+            <p className="text-slate-400 text-xs font-light mb-6">Search GitHub repositories your token can access, including organization workspaces.</p>
 
             <div className="relative mb-6">
               <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -159,7 +159,7 @@ export default function RepositoriesPage() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Find e.g. 'core-api'..."
+                placeholder="Find e.g. 'org/core-api'..."
                 className="w-full pl-10 pr-4 py-3 bg-surface-900 border border-white/10 hover:border-white/20 rounded-xl text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500/50 shadow-inner transition-all"
               />
               {searchQuery && (
@@ -183,7 +183,7 @@ export default function RepositoriesPage() {
                   <p className="text-center text-slate-500 text-sm py-8 font-light">No matching repositories surfaced.</p>
                 ) : (
                   ghRepos?.items?.map((repo) => {
-                    const isConnected = repos.some(r => r.githubId === repo.id.toString());
+                    const isConnected = repos.some(r => String(r.githubRepoId) === String(repo.id) || r.fullName === repo.full_name);
                     return (
                       <div key={repo.id} className="flex items-center justify-between p-3.5 rounded-xl bg-surface-900 border border-white/5 hover:border-white/10 transition-colors group">
                         <div className="min-w-0 pr-2">

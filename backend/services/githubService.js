@@ -1,5 +1,13 @@
 const axios = require('axios');
 
+function encodeGitHubPath(filePath) {
+  return String(filePath || '')
+    .split('/')
+    .filter(Boolean)
+    .map(part => encodeURIComponent(part))
+    .join('/');
+}
+
 class GitHubService {
   constructor(token) {
     this.client = axios.create({
@@ -14,7 +22,7 @@ class GitHubService {
 
   async listRepos(perPage = 50) {
     const res = await this.client.get('/user/repos', {
-      params: { sort: 'updated', per_page: perPage, affiliation: 'owner,collaborator' },
+      params: { sort: 'updated', per_page: perPage, affiliation: 'owner,collaborator,organization_member' },
     });
     return res.data;
   }
@@ -54,7 +62,7 @@ class GitHubService {
   }
 
   async getFileContent(owner, repo, path, ref) {
-    const res = await this.client.get(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, {
+    const res = await this.client.get(`/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}`, {
       params: ref ? { ref } : {},
     });
     // GitHub may return an array for directories; handle gracefully
@@ -110,22 +118,35 @@ class GitHubService {
   }
 
   async searchUserRepos(query) {
+    const trimmed = String(query || '').trim();
     let username;
     try {
+      if (/^[^/\s]+\/[^/\s]+$/.test(trimmed)) {
+        const [owner, repo] = trimmed.split('/');
+        const exact = await this.getRepo(owner, repo);
+        return { total_count: 1, items: [exact] };
+      }
+
       // Get the authenticated user's login to scope the search to their account
       const userRes = await this.client.get('/user');
       username = userRes.data.login;
       
       const res = await this.client.get('/search/repositories', {
-        // Search by repo name within the user's account
-        params: { q: `${query} user:${username} in:name`, per_page: 15 },
+        params: { q: `${trimmed} in:name fork:true`, per_page: 15 },
       });
-      return res.data;
+      const accessible = (res.data.items || []).filter(repo =>
+        repo.owner?.login === username ||
+        repo.permissions?.push ||
+        repo.permissions?.admin ||
+        repo.permissions?.maintain ||
+        repo.permissions?.triage
+      );
+      return { ...res.data, items: accessible.length ? accessible : res.data.items };
     } catch (error) {
       // Fallback to a global search if scoping fails, or return error if fallback fails
       try {
         const fallbackRes = await this.client.get('/search/repositories', {
-          params: { q: `${query} in:name`, per_page: 15 },
+          params: { q: `${trimmed} in:name fork:true`, per_page: 15 },
         });
         return fallbackRes.data;
       } catch (fallbackError) {
@@ -158,7 +179,7 @@ class GitHubService {
     // Try to fetch the existing file to obtain sha for update
     let sha;
     try {
-      const getRes = await this.client.get(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, { params: { ref: branch } });
+      const getRes = await this.client.get(`/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}`, { params: { ref: branch } });
       sha = getRes.data.sha;
     } catch (e) {
       // file may not exist; continue to create
@@ -169,7 +190,7 @@ class GitHubService {
       branch,
     };
     if (sha) body.sha = sha;
-    const res = await this.client.put(`/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`, body);
+    const res = await this.client.put(`/repos/${owner}/${repo}/contents/${encodeGitHubPath(path)}`, body);
     return res.data;
   }
 

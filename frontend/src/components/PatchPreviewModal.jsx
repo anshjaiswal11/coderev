@@ -1,14 +1,18 @@
 import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { GitBranch, Github, X } from 'lucide-react';
 
-export default function PatchPreviewModal({ open, onClose, onCreatePR, initial }) {
+export default function PatchPreviewModal({ open, onClose, onCreatePR, initial, defaultRepoFullName = '', defaultBaseBranch = 'main' }) {
   const [content, setContent] = useState(initial?.patch || initial?.content || '');
   const [filePath, setFilePath] = useState(initial?.filePath || initial?.path || 'autofix/patch.txt');
+  const [targetRepoFullName, setTargetRepoFullName] = useState(defaultRepoFullName);
+  const [targetBaseBranch, setTargetBaseBranch] = useState(defaultBaseBranch);
 
   useEffect(() => {
     setContent(initial?.patch || initial?.content || '');
     setFilePath(initial?.filePath || initial?.path || 'autofix/patch.txt');
-  }, [initial]);
+    setTargetRepoFullName(initial?.targetRepoFullName || defaultRepoFullName || '');
+    setTargetBaseBranch(initial?.targetBaseBranch || defaultBaseBranch || 'main');
+  }, [initial, defaultRepoFullName, defaultBaseBranch]);
 
   if (!open) return null;
 
@@ -21,13 +25,46 @@ export default function PatchPreviewModal({ open, onClose, onCreatePR, initial }
             <div className="font-semibold">Preview Patch</div>
             <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={18} /></button>
           </div>
-          <div className="p-4 space-y-3">
-            <label className="text-xs text-slate-400">Target file path</label>
-            <input value={filePath} onChange={e => setFilePath(e.target.value)} className="input w-full" />
-            <label className="text-xs text-slate-400">Patch / File content</label>
-            <textarea value={content} onChange={e => setContent(e.target.value)} rows={12} className="w-full bg-black/5 p-3 rounded text-sm font-mono" />
+          <div className="p-4 space-y-4">
+            <div className="grid md:grid-cols-[1fr_180px] gap-3">
+              <div>
+                <label className="text-xs text-slate-400 flex items-center gap-1.5 mb-1.5">
+                  <Github size={13} /> Target repository
+                </label>
+                <input
+                  value={targetRepoFullName}
+                  onChange={e => setTargetRepoFullName(e.target.value)}
+                  placeholder="owner/repo"
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 flex items-center gap-1.5 mb-1.5">
+                  <GitBranch size={13} /> Base branch
+                </label>
+                <input
+                  value={targetBaseBranch}
+                  onChange={e => setTargetBaseBranch(e.target.value)}
+                  placeholder="main"
+                  className="input w-full"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 mb-1.5 block">Target file path</label>
+              <input value={filePath} onChange={e => setFilePath(e.target.value)} className="input w-full" />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 mb-1.5 block">Patch / File content</label>
+              <textarea value={content} onChange={e => setContent(e.target.value)} rows={12} className="w-full bg-black/5 p-3 rounded text-sm font-mono" />
+            </div>
             <div className="flex items-center justify-end gap-2">
-              <button onClick={() => onCreatePR({ filePath, content })} className="px-4 py-2 bg-emerald-500 text-white rounded">Create PR</button>
+              <button
+                onClick={() => onCreatePR({ filePath, content, targetRepoFullName, targetBaseBranch })}
+                className="px-4 py-2 bg-emerald-500 text-white rounded"
+              >
+                Create Pull Request
+              </button>
               <button onClick={onClose} className="px-4 py-2 bg-white/5 text-slate-200 rounded">Cancel</button>
             </div>
           </div>

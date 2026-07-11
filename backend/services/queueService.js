@@ -71,26 +71,38 @@ function setupWebhookQueue(io) {
       const safeRiskScore = typeof result.riskScore === 'number' ? result.riskScore : 0;
 
       const summaryText = result.summary || (result._rawAIError ? `AI parse error: ${result._rawAIError}` : 'No summary generated');
-      await Review.findByIdAndUpdate(reviewId, {
-        status: 'completed',
-        issues: result.issues,
-        summary: summaryText,
-        riskScore: result.riskScore,
-        riskFactors: result.riskFactors,
-        suggestedTests: result.suggestedTests || [],
-        secretsDetected: result.secretsDetected || [],
-        complianceFlags: result.complianceFlags || [],
-        totalIssues: result.issues.length,
-        errorCount,
-        warningCount,
-        infoCount,
-        processingTime: Date.now() - startTime,
-        aiModelsUsed: [process.env.OPENROUTER_MODEL || 'anthropic/claude-sonnet-4'],
-        rawAIResponse: result._rawAIResponse || result.rawAIResponse || undefined,
-        rawAIError: result._rawAIError || result.rawAIError || undefined,
-        errorMessage: (!result.issues || result.issues.length === 0) && result._rawAIError
-          ? `AI parse error: ${result._rawAIError}` : undefined,
-      });
+      const parseError = result._rawAIError || result.rawAIError;
+      const update = {
+        $set: {
+          status: 'completed',
+          issues: result.issues,
+          summary: summaryText,
+          riskScore: result.riskScore,
+          riskFactors: result.riskFactors,
+          suggestedTests: result.suggestedTests || [],
+          secretsDetected: result.secretsDetected || [],
+          complianceFlags: result.complianceFlags || [],
+          suggestedChanges: result.suggestedChanges || [],
+          totalIssues: result.issues.length,
+          errorCount,
+          warningCount,
+          infoCount,
+          processingTime: Date.now() - startTime,
+          aiModelsUsed: [process.env.OPENROUTER_MODEL || 'anthropic/claude-sonnet-4'],
+          rawAIResponse: result._rawAIResponse || result.rawAIResponse || '',
+        },
+        $unset: {},
+      };
+      if (parseError) {
+        update.$set.rawAIError = parseError;
+        if (!result.issues.length) update.$set.errorMessage = `AI parse error: ${parseError}`;
+        else update.$unset.errorMessage = '';
+      } else {
+        update.$unset.rawAIError = '';
+        update.$unset.errorMessage = '';
+      }
+      if (!Object.keys(update.$unset).length) delete update.$unset;
+      await Review.findByIdAndUpdate(reviewId, update);
 
       await Repository.findByIdAndUpdate(repo._id, {
         $inc: { totalReviews: 1, openIssues: result.issues.length },
@@ -164,22 +176,35 @@ async function processReviewDirectly(reviewId) {
     const safeRiskScore = typeof result.riskScore === 'number' ? result.riskScore : 0; // eslint-disable-line no-unused-vars
 
     const summaryText = result.summary || (result._rawAIError ? `AI parse error: ${result._rawAIError}` : 'No summary generated');
-    await Review.findByIdAndUpdate(reviewId, {
-      status: 'completed',
-      issues: result.issues,
-      summary: summaryText,
-      riskScore: result.riskScore,
-      riskFactors: result.riskFactors,
-      suggestedTests: result.suggestedTests || [],
-      secretsDetected: result.secretsDetected || [],
-      totalIssues: result.issues.length,
-      errorCount, warningCount, infoCount,
-      aiModelsUsed: [process.env.OPENROUTER_MODEL || 'anthropic/claude-sonnet-4'],
-      rawAIResponse: result._rawAIResponse || result.rawAIResponse || undefined,
-      rawAIError: result._rawAIError || result.rawAIError || undefined,
-      errorMessage: (!result.issues || result.issues.length === 0) && result._rawAIError
-        ? `AI parse error: ${result._rawAIError}` : undefined,
-    });
+    const parseError = result._rawAIError || result.rawAIError;
+    const update = {
+      $set: {
+        status: 'completed',
+        issues: result.issues,
+        summary: summaryText,
+        riskScore: result.riskScore,
+        riskFactors: result.riskFactors,
+        suggestedTests: result.suggestedTests || [],
+        secretsDetected: result.secretsDetected || [],
+        complianceFlags: result.complianceFlags || [],
+        suggestedChanges: result.suggestedChanges || [],
+        totalIssues: result.issues.length,
+        errorCount, warningCount, infoCount,
+        aiModelsUsed: [process.env.OPENROUTER_MODEL || 'anthropic/claude-sonnet-4'],
+        rawAIResponse: result._rawAIResponse || result.rawAIResponse || '',
+      },
+      $unset: {},
+    };
+    if (parseError) {
+      update.$set.rawAIError = parseError;
+      if (!result.issues.length) update.$set.errorMessage = `AI parse error: ${parseError}`;
+      else update.$unset.errorMessage = '';
+    } else {
+      update.$unset.rawAIError = '';
+      update.$unset.errorMessage = '';
+    }
+    if (!Object.keys(update.$unset).length) delete update.$unset;
+    await Review.findByIdAndUpdate(reviewId, update);
   } catch (err) {
     await Review.findByIdAndUpdate(reviewId, { status: 'failed', errorMessage: err.message });
   }

@@ -77,20 +77,145 @@ async function callOpenRouter(messages, { model, maxTokens = 4000, temperature =
   return content;
 }
 
+function stripLineCommentsOutsideStrings(input) {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    const next = input[i + 1];
+
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+
+    if (ch === '/' && next === '/') {
+      while (i < input.length && input[i] !== '\n') i++;
+      if (i < input.length) out += input[i];
+      continue;
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
+function removeTrailingCommasOutsideStrings(input) {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+
+    if (ch === ',') {
+      let j = i + 1;
+      while (j < input.length && /\s/.test(input[j])) j++;
+      if (input[j] === '}' || input[j] === ']') continue;
+    }
+
+    out += ch;
+  }
+
+  return out;
+}
+
 function parseLooseJSON(str) {
+  const original = String(str || '').trim();
   try {
-    let cleaned = str.trim();
-    // Remove trailing commas in objects and arrays
-    cleaned = cleaned.replace(/,(\s*[\]}])/g, '$1');
-    // Remove single line comments
-    cleaned = cleaned.replace(/(?:^|[^:])\/\/.*$/g, '');
-    return JSON.parse(cleaned);
-  } catch (e) {
-    return JSON.parse(str); // Fall back to strict parse to preserve original error
+    return JSON.parse(original);
+  } catch (strictErr) {
+    const cleaned = removeTrailingCommasOutsideStrings(stripLineCommentsOutsideStrings(original));
+    try {
+      return JSON.parse(cleaned);
+    } catch (looseErr) {
+      throw looseErr;
+    }
   }
 }
 
+function findBalancedCandidate(text, openChar, closeChar, start) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === openChar) depth++;
+    else if (ch === closeChar) {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+
+  return null;
+}
+
+function parseFirstBalancedJSON(text, openChar, closeChar) {
+  let startAt = 0;
+  while (startAt < text.length) {
+    const start = text.indexOf(openChar, startAt);
+    if (start === -1) return null;
+    const candidate = findBalancedCandidate(text, openChar, closeChar, start);
+    if (!candidate) return null;
+    try {
+      return parseLooseJSON(candidate);
+    } catch (e) {
+      startAt = start + 1;
+    }
+  }
+  return null;
+}
+
 function extractJSON(text) {
+  if (text && typeof text === 'object') return text;
+  text = String(text || '');
+
+  try {
+    return parseLooseJSON(text);
+  } catch (e) {
+    // Fall through to markdown and embedded JSON extraction.
+  }
+
   // 1) Try fenced ```json blocks (common when model responds with markdown)
   const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/i);
   if (fenced) {
@@ -101,35 +226,12 @@ function extractJSON(text) {
     }
   }
 
-  // 2) Try to locate a balanced JSON object starting at the first '{'
-  const firstBrace = text.indexOf('{');
-  if (firstBrace !== -1) {
-    let depth = 0;
-    for (let i = firstBrace; i < text.length; i++) {
-      const ch = text[i];
-      if (ch === '{') depth++;
-      else if (ch === '}') depth--;
-      if (depth === 0) {
-        const candidate = text.slice(firstBrace, i + 1);
-        try { return parseLooseJSON(candidate); } catch (e) { break; }
-      }
-    }
-  }
+  // 2) Try to locate a balanced JSON object/array while ignoring braces inside strings.
+  const objectResult = parseFirstBalancedJSON(text, '{', '}');
+  if (objectResult) return objectResult;
 
-  // 3) Try to find a top-level JSON array
-  const firstBracket = text.indexOf('[');
-  if (firstBracket !== -1) {
-    let depth = 0;
-    for (let i = firstBracket; i < text.length; i++) {
-      const ch = text[i];
-      if (ch === '[') depth++;
-      else if (ch === ']') depth--;
-      if (depth === 0) {
-        const candidate = text.slice(firstBracket, i + 1);
-        try { return parseLooseJSON(candidate); } catch (e) { break; }
-      }
-    }
-  }
+  const arrayResult = parseFirstBalancedJSON(text, '[', ']');
+  if (arrayResult) return arrayResult;
 
   const json_match = text.match(/({[\s\S]*})/);
   if (json_match) {
@@ -145,6 +247,59 @@ function extractJSON(text) {
   // If we get here, give a helpful error with a snippet of the model output for debugging
   const snippet = (text || '').substring(0, 400).replace(/\s+/g, ' ');
   throw new Error(`AI returned invalid JSON. Response snippet: ${snippet}`);
+}
+
+function toNumber(value, fallback = null) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function normalizeReviewResult(parsed, rawText) {
+  const source = Array.isArray(parsed) ? { issues: parsed } : (parsed && typeof parsed === 'object' ? parsed : {});
+  const issues = Array.isArray(source.issues) ? source.issues : [];
+  const normalizedIssues = issues
+    .filter(Boolean)
+    .map(issue => ({
+      file: issue.file || issue.path || '',
+      line: toNumber(issue.line, undefined),
+      endLine: toNumber(issue.endLine || issue.end_line, undefined),
+      category: issue.category || issue.type || 'bug',
+      severity: issue.severity || 'warning',
+      title: issue.title || issue.message || issue.description || 'Review finding',
+      description: issue.description || issue.message || issue.title || '',
+      suggestion: issue.suggestion || issue.fix || issue.recommendation || '',
+      patchCode: issue.patchCode || issue.patch || issue.codeExample || '',
+      owaspCategory: issue.owaspCategory,
+      cweid: issue.cweid || issue.cweId || issue.cwe,
+    }));
+
+  const riskFactors = source.riskFactors && typeof source.riskFactors === 'object'
+    ? {
+        blastRadius: toNumber(source.riskFactors.blastRadius, 0),
+        complexity: toNumber(source.riskFactors.complexity, 0),
+        churnScore: toNumber(source.riskFactors.churnScore, 0),
+        securityFlags: toNumber(source.riskFactors.securityFlags, 0),
+      }
+    : { blastRadius: 0, complexity: 0, churnScore: 0, securityFlags: 0 };
+
+  return {
+    ...source,
+    summary: source.summary || source.overview || source.message || '',
+    rating: toNumber(source.rating, undefined),
+    aiRating: toNumber(source.aiRating || source.rating, undefined),
+    suggestedChanges: Array.isArray(source.suggestedChanges) ? source.suggestedChanges : [],
+    riskScore: toNumber(source.riskScore, null),
+    riskFactors,
+    issues: normalizedIssues,
+    secretsDetected: Array.isArray(source.secretsDetected) ? source.secretsDetected : [],
+    suggestedTests: Array.isArray(source.suggestedTests) ? source.suggestedTests : [],
+    complianceFlags: Array.isArray(source.complianceFlags) ? source.complianceFlags : [],
+    _rawAIResponse: source._rawAIResponse || rawText,
+  };
 }
 
 // Temporary server-side logging for raw AI responses
@@ -294,7 +449,7 @@ Respond with ONLY valid JSON in this exact schema:
   let text = await callOpenRouter(messages, { jsonMode: true });
   let parsed;
   try {
-    parsed = extractJSON(text);
+    parsed = normalizeReviewResult(extractJSON(text), text);
   } catch (err) {
     console.warn('AI review returned invalid JSON, attempting repair');
     console.warn(text && text.substring ? text.substring(0, 1000) : text);
@@ -308,7 +463,8 @@ Respond with ONLY valid JSON in this exact schema:
       ];
       const repairedText = await callOpenRouter(repairPrompt, { maxTokens: 2000, jsonMode: true });
       try {
-        parsed = extractJSON(repairedText);
+        parsed = normalizeReviewResult(extractJSON(repairedText), repairedText);
+        text = repairedText;
       } catch (e2) {
         console.warn('Repair attempt failed to produce valid JSON');
         logRawAIResponse('runAIReview:repair', repairedText, `${err && err.message} | ${e2 && e2.message}`);
@@ -546,7 +702,7 @@ Respond with ONLY valid JSON. Do not write any explanations before or after the 
     const text = await callOpenRouter(messages, { maxTokens: 6000, jsonMode: true });
     let part = {};
     try {
-      part = extractJSON(text);
+      part = normalizeReviewResult(extractJSON(text), text);
     } catch (e) {
       console.warn('runRepoReview: failed to parse AI JSON for a chunk, saving raw response');
       logRawAIResponse('runRepoReview:chunk', text, e && e.message);
@@ -601,7 +757,7 @@ Respond with ONLY valid JSON. Do not write any explanations before or after the 
 async function parseRawAIResponse(text) {
   if (!text) return null;
   try {
-    const parsed = extractJSON(text);
+    const parsed = normalizeReviewResult(extractJSON(text), text);
     // ensure summary exists
     if (!parsed.summary || String(parsed.summary).trim() === '') {
       parsed.summary = cleanSummaryFromText(text, 400);
@@ -630,4 +786,9 @@ module.exports = {
   runRepoReview,
   generateSuggestedChange,
   parseRawAIResponse,
+  _private: {
+    extractJSON,
+    normalizeReviewResult,
+    parseLooseJSON,
+  },
 };

@@ -28,22 +28,29 @@ async function main() {
 
       const riskScore = (typeof parsed.riskScore === 'number') ? parsed.riskScore : (issues.length ? Math.min(90, issues.length * 10) : null);
 
-      await Review.findByIdAndUpdate(doc._id, {
-        summary: parsed.summary || doc.summary,
-        issues,
-        secretsDetected,
-        suggestedTests,
-        complianceFlags,
-        suggestedChanges,
-        riskScore,
-        riskFactors: parsed.riskFactors || doc.riskFactors || null,
-        totalIssues: issues.length,
-        errorCount: issues.filter(i => i.severity === 'error').length,
-        warningCount: issues.filter(i => i.severity === 'warning').length,
-        infoCount: issues.filter(i => i.severity === 'info').length,
-        rawAIError: parsed._rawAIError || doc.rawAIError,
-        updatedAt: new Date(),
-      });
+      const update = {
+        $set: {
+          summary: parsed.summary || doc.summary,
+          issues,
+          secretsDetected,
+          suggestedTests,
+          complianceFlags,
+          suggestedChanges,
+          riskScore,
+          riskFactors: parsed.riskFactors || doc.riskFactors || null,
+          totalIssues: issues.length,
+          errorCount: issues.filter(i => i.severity === 'error').length,
+          warningCount: issues.filter(i => i.severity === 'warning').length,
+          infoCount: issues.filter(i => i.severity === 'info').length,
+          updatedAt: new Date(),
+        },
+        $unset: {},
+      };
+      if (parsed._rawAIError) update.$set.rawAIError = parsed._rawAIError;
+      else update.$unset.rawAIError = '';
+      if (!Object.keys(update.$unset).length) delete update.$unset;
+
+      await Review.findByIdAndUpdate(doc._id, update);
       console.log(`Updated review ${doc._id}: issues=${issues.length} risk=${riskScore}`);
       count++;
     } catch (err) {
