@@ -6,11 +6,23 @@ const auth = require('../middleware/auth');
 
 const router = express.Router();
 
+/**
+ * Returns the frontend base URL.
+ * Priority:
+ *  1. FRONTEND_URL env var — only if it's NOT a localhost URL (so production always wins)
+ *  2. Request origin header (if not from github.com)
+ *  3. Referer header origin (if not from github.com)
+ *  4. Hard fallback to localhost for local dev
+ */
 function getFrontendUrl(req) {
-  if (process.env.FRONTEND_URL) return process.env.FRONTEND_URL;
+  const envUrl = process.env.FRONTEND_URL;
+  if (envUrl && !isLocalhost(envUrl)) return envUrl;
 
   const origin = req.headers.origin;
-  if (origin && !origin.includes('github.com')) return origin;
+  if (origin && !origin.includes('github.com') && !isLocalhost(origin) === false) {
+    // Use origin even if localhost (for local dev)
+    if (origin && !origin.includes('github.com')) return origin;
+  }
 
   const referer = req.headers.referer;
   if (referer) {
@@ -24,19 +36,51 @@ function getFrontendUrl(req) {
     }
   }
 
+  // If FRONTEND_URL is a localhost URL, use it only in local dev
+  if (envUrl) return envUrl;
+
   return 'http://localhost:5173';
 }
 
+/**
+ * Returns the GitHub OAuth callback URL.
+ * Priority:
+ *  1. GITHUB_CALLBACK_URL env var — but ONLY if it's not a localhost URL in production
+ *  2. Dynamically built from the request host (works on any deployment)
+ */
 function getGithubCallbackUrl(req) {
-  if (process.env.GITHUB_CALLBACK_URL) return process.env.GITHUB_CALLBACK_URL;
-  return `${req.protocol}://${req.get('host')}/api/auth/github/callback`;
+  const envUrl = process.env.GITHUB_CALLBACK_URL;
+  // In production (non-localhost host), ignore localhost callback URLs to prevent redirect_uri_mismatch
+  const reqHost = req.get('host') || '';
+  const isProductionHost = !isLocalhost(reqHost);
+
+  if (envUrl && !isLocalhost(envUrl)) return envUrl;
+
+  // Dynamically build from request — requires `trust proxy` to get correct protocol
+  return `${req.protocol}://${reqHost}/api/auth/github/callback`;
+}
+
+function isLocalhost(url) {
+  try {
+    const h = new URL(url).hostname;
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+  } catch {
+    return url.includes('localhost') || url.includes('127.0.0.1');
+  }
 }
 
 // Step 1: Redirect to GitHub OAuth
 router.get('/github', (req, res) => {
+  const clientId = process.env.GITHUB_CLIENT_ID;
+  if (!clientId) {
+    return res.status(500).json({ error: 'GITHUB_CLIENT_ID is not configured on the server.' });
+  }
+
   const callbackUrl = getGithubCallbackUrl(req);
+  console.log('[OAuth] Initiating GitHub OAuth, callback:', callbackUrl);
+
   const params = new URLSearchParams({
-    client_id: process.env.GITHUB_CLIENT_ID,
+    client_id: clientId,
     redirect_uri: callbackUrl,
     scope: 'read:user user:email repo',
     state: Math.random().toString(36).substring(7),
@@ -46,11 +90,15 @@ router.get('/github', (req, res) => {
 
 // Step 2: GitHub OAuth callback
 router.get('/github/callback', async (req, res) => {
-  const { code, error } = req.query;
+  const { code, error, error_description } = req.query;
   const frontendUrl = getFrontendUrl(req);
   const callbackUrl = getGithubCallbackUrl(req);
 
+  console.log('[OAuth] Callback hit. code:', code ? '✅' : '❌', '| error:', error || 'none');
+  console.log('[OAuth] frontendUrl:', frontendUrl, '| callbackUrl:', callbackUrl);
+
   if (error || !code) {
+    console.error('[OAuth] Denied or missing code:', error, error_description);
     return res.redirect(`${frontendUrl}/login?error=oauth_denied`);
   }
 
@@ -67,8 +115,15 @@ router.get('/github/callback', async (req, res) => {
       { headers: { Accept: 'application/json' } }
     );
 
-    const { access_token } = tokenRes.data;
-    if (!access_token) throw new Error('No access token received');
+    console.log('[OAuth] Token response:', JSON.stringify(tokenRes.data).substring(0, 200));
+
+    const { access_token, error: tokenError, error_description: tokenErrDesc } = tokenRes.data;
+    if (tokenError) {
+      throw new Error(`GitHub token error: ${tokenError} — ${tokenErrDesc || ''}`);
+    }
+    if (!access_token) {
+      throw new Error(`No access token received. GitHub response: ${JSON.stringify(tokenRes.data)}`);
+    }
 
     // Fetch GitHub user profile
     const [profileRes, emailsRes] = await Promise.all([
@@ -82,6 +137,8 @@ router.get('/github/callback', async (req, res) => {
 
     const ghUser = profileRes.data;
     const primaryEmail = (Array.isArray(emailsRes.data) ? emailsRes.data.find(e => e.primary)?.email : null) || ghUser.email;
+
+    console.log('[OAuth] GitHub user:', ghUser.login, '| email:', primaryEmail);
 
     // Upsert user in MongoDB
     const user = await User.findOneAndUpdate(
@@ -99,6 +156,8 @@ router.get('/github/callback', async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
+    console.log('[OAuth] User upserted:', user._id.toString());
+
     // Issue JWT
     const token = jwt.sign(
       { userId: user._id, githubId: user.githubId },
@@ -107,15 +166,18 @@ router.get('/github/callback', async (req, res) => {
     );
 
     // Redirect to frontend with token
-    res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
+    const redirectTo = `${frontendUrl}/auth/callback?token=${token}`;
+    console.log('[OAuth] Success — redirecting to:', redirectTo.substring(0, 80));
+    res.redirect(redirectTo);
   } catch (err) {
-    console.error('GitHub OAuth error:', err.message);
-    if (err.response && err.response.data) {
-      console.error('GitHub OAuth error response data:', err.response.data);
+    console.error('[OAuth] Error:', err.message);
+    if (err.response?.data) {
+      console.error('[OAuth] Response data:', JSON.stringify(err.response.data).substring(0, 500));
     }
     res.redirect(`${frontendUrl}/login?error=oauth_failed`);
   }
 });
+
 // Get current user
 router.get('/me', auth, async (req, res) => {
   try {
@@ -133,8 +195,6 @@ router.patch('/settings', auth, async (req, res) => {
   try {
     const { customPrompt, mutedCategories, strictMode } = req.body;
 
-    // We add strictMode to settings if we want to store it, 
-    // but the User model doesn't explicitly have it. We can add it dynamically or update existing fields.
     const updateData = {
       $set: {
         'styleGuide.customPrompt': customPrompt,
@@ -146,7 +206,6 @@ router.patch('/settings', auth, async (req, res) => {
       .populate('badges')
       .lean();
 
-    // Return updated user object
     res.json({ user: { ...user, githubToken: undefined, settings: { strictMode, customPrompt, mutedCategories } } });
   } catch (err) {
     res.status(500).json({ error: err.message });

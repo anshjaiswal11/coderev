@@ -76,19 +76,33 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/badges', badgeRoutes);
 
-// Health check
+// Health check / diagnostics
 app.get('/api/health', (req, res) => {
   const mongoose = require('mongoose');
   const dbState = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+
+  // Reconstruct what the OAuth callback URL would be (mirrors auth.js logic)
+  const envCallback = process.env.GITHUB_CALLBACK_URL;
+  const isLocalhostCallback = envCallback && (envCallback.includes('localhost') || envCallback.includes('127.0.0.1'));
+  const dynamicCallback = `${req.protocol}://${req.get('host')}/api/auth/github/callback`;
+  const effectiveCallback = (envCallback && !isLocalhostCallback) ? envCallback : dynamicCallback;
+
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     db: dbState[mongoose.connection.readyState] || 'unknown',
     env: process.env.NODE_ENV || 'development',
-    mongoUri: process.env.MONGODB_URI ? '✅ set' : '❌ missing',
+    mongoUri: process.env.MONGODB_URI ? (process.env.MONGODB_URI.includes('localhost') ? '⚠️  localhost (will fail on Vercel)' : '✅ set') : '❌ missing',
     openrouterKey: process.env.OPENROUTER_API_KEY ? '✅ set' : '❌ missing',
     jwtSecret: process.env.JWT_SECRET ? '✅ set' : '❌ using dev-secret',
-    frontendUrl: process.env.FRONTEND_URL || '(not set)',
+    frontendUrl: process.env.FRONTEND_URL || '(not set — will try to auto-detect)',
+    githubClientId: process.env.GITHUB_CLIENT_ID ? '✅ set' : '❌ missing',
+    githubCallbackUrl: {
+      envVar: envCallback || '(not set)',
+      isLocalhostValue: isLocalhostCallback || false,
+      effectiveCallbackUrl: effectiveCallback,
+      warning: isLocalhostCallback ? '⚠️  GITHUB_CALLBACK_URL points to localhost — will cause redirect_uri_mismatch on Vercel!' : null,
+    },
   });
 });
 
