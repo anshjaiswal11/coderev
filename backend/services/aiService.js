@@ -15,6 +15,8 @@ const MAX_API_CALLS_PER_MINUTE = 5;
 let apiCalls = 0;
 let lastResetTime = Date.now();
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Make a chat completion request to OpenRouter API.
  * OpenRouter uses an OpenAI-compatible format.
@@ -455,7 +457,13 @@ async function runRepoReview({ repoName, files = [], repoContext = '', styleGuid
     ratings: [],
   };
 
+  let isFirst = true;
   for (const chunk of chunks) {
+    if (!isFirst) {
+      await sleep(3000);
+    }
+    isFirst = false;
+
     const messages = [
       { role: 'system', content: REVIEW_SYSTEM_PROMPT },
       {
